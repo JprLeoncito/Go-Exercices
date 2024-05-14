@@ -1,23 +1,19 @@
 package main
 
 import (
-	"crypto/rand"
 	"database/sql"
-	"encoding/json"
-	"log"
-	"math/big"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
-	"github.com/gorilla/mux"
+	"github.com/gin-gonic/gin"
 	_ "github.com/lib/pq"
+	"golang.org/x/crypto/bcrypt"
 )
 
 const (
 	dbHost     = "localhost"
-	dbPort     = 5433
+	dbPort     = 5432
 	dbUser     = "postgres"
 	dbPassword = "admin"
 	dbName     = "postgres"
@@ -25,168 +21,86 @@ const (
 
 var db *sql.DB
 
-type Password struct {
-	ID           int       `json:"id"`
-	Password     string    `json:"password"`
-	CreationDate time.Time `json:"creation_date"`
-	UserID       int       `json:"user_id"`
-}
-
-const (
-	lowercaseLetters = "abcdefghijklmnopqrstuvwxyz"
-	uppercaseLetters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	numbers          = "0123456789"
-	symbols          = "!@#$%^&*()-_=+,.?/:;{}[]~"
-)
-
-type PasswordRequest struct {
-	Length           int    `json:"length"`
-	IncludeNumbers   bool   `json:"includeNumbers"`
-	IncludeSymbols   bool   `json:"includeSymbols"`
-	IncludeUppercase bool   `json:"includeUppercase"`
-	Type             string `json:"type"`
-}
-
-type PasswordResponse struct {
-	Password string `json:"password"`
-}
-
-func generateRandomPassword(length int, includeNumbers, includeSymbols, includeUppercase bool) string {
-	var chars string
-	if includeNumbers {
-		chars += numbers
-	}
-	if includeSymbols {
-		chars += symbols
-	}
-	if includeUppercase {
-		chars += uppercaseLetters
-	}
-	chars += lowercaseLetters
-
-	var password strings.Builder
-	for i := 0; i < length; i++ {
-		randomIndex, err := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
-		if err != nil {
-			panic(err)
-		}
-		password.WriteByte(chars[randomIndex.Int64()])
-	}
-	return password.String()
-}
-
-func initDB() {
+func main() {
+	// Initialize database connection
 	connectionString := "host=" + dbHost + " port=" + strconv.Itoa(dbPort) + " user=" + dbUser + " password=" + dbPassword + " dbname=" + dbName + " sslmode=disable"
+
 	var err error
 	db, err = sql.Open("postgres", connectionString)
 	if err != nil {
-		log.Fatal("Error connecting to the database: ", err)
+		panic(err)
+	}
+	defer db.Close()
+
+	// Create Gin router
+	router := gin.Default()
+
+	// Define API endpoints
+	router.POST("/passwords", savePassword)
+	router.GET("/passwords", getPasswords)
+
+	// Start server
+	router.Run(":8081")
+}
+func savePassword(c *gin.Context) {
+	// Validate input
+	var input struct {
+		Username string `json:"username" binding:"required"`
+		Password string `json:"password" binding:"required"`
+		URL      string `json:"url" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 
-	// Ping the database to check if the connection is successful
-	if err := db.Ping(); err != nil {
-		log.Fatal("Error pinging database: ", err)
+	// Generate a strong password hash
+	hashedPassword, err := HashPassword(input.Password)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate password hash"})
+		return
 	}
+
+	// Save password to the database
+	_, err = db.Exec("INSERT INTO passwords (username, password, url, created_at) VALUES ($1, $2, $3, $4)",
+		input.Username, hashedPassword, input.URL, time.Now())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save password"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Password saved successfully"})
 }
 
-func SavePassword(password string, userID int) error {
-	_, err := db.Exec("INSERT INTO passwords (password_string, user_id) VALUES ($1, $2)", password, userID)
+func getPasswords(c *gin.Context) {
+	// Query passwords from the database
+	rows, err := db.Query("SELECT id, username, password, url, created_at FROM passwords")
 	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func RetrievePasswords(userID int) ([]Password, error) {
-	rows, err := db.Query("SELECT id, password_string, creation_date FROM passwords WHERE user_id = $1", userID)
-	if err != nil {
-		return nil, err
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve passwords"})
+		return
 	}
 	defer rows.Close()
 
-	var passwords []Password
+	var passwords []gin.H // Ensure this variable is declared to store the passwords
+
+	// Iterate over rows and build response
 	for rows.Next() {
-		var p Password
-		err := rows.Scan(&p.ID, &p.Password, &p.CreationDate)
-		if err != nil {
-			return nil, err
+		var id int
+		var username, password, url string
+		var createdAt time.Time
+		// Make sure to include password in the Scan method
+		if err := rows.Scan(&id, &username, &password, &url, &createdAt); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to scan rows"})
+			return
 		}
-		p.UserID = userID
-		passwords = append(passwords, p)
+		// Include password in the response if necessary
+		passwords = append(passwords, gin.H{"id": id, "username": username, "password": password, "url": url, "created_at": createdAt})
 	}
 
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return passwords, nil
-}
-func GeneratePasswordHandler(w http.ResponseWriter, r *http.Request) {
-	// Generate password...
-	var req PasswordRequest
-	err := json.NewDecoder(r.Body).Decode(&req)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	var passwordType string
-	switch req.Type {
-	case "random":
-		passwordType = "random"
-	case "alphanumeric":
-		passwordType = "alphanumeric"
-	case "pin":
-		passwordType = "pin"
-	default:
-		http.Error(w, "Invalid password type. Please choose 'random', 'alphanumeric', or 'pin'.", http.StatusBadRequest)
-		return
-	}
-
-	var password string
-	switch passwordType {
-	case "random":
-		password = generateRandomPassword(req.Length, req.IncludeNumbers, req.IncludeSymbols, req.IncludeUppercase)
-	case "alphanumeric":
-		password = generateRandomPassword(req.Length, true, false, req.IncludeUppercase)
-	case "pin":
-		password = generateRandomPassword(6, true, false, false)
-	}
-
-	res := PasswordResponse{Password: password}
-	json.NewEncoder(w).Encode(res)
-
-	// Save password to database
-	userID := 1 // Example user ID
-	err = SavePassword(password, userID)
-	if err != nil {
-		http.Error(w, "Error saving password", http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusCreated)
+	c.JSON(http.StatusOK, passwords)
 }
 
-func RetrievePasswordsHandler(w http.ResponseWriter, r *http.Request) {
-	// Retrieve passwords from database
-	userID := 1 // Example user ID
-	passwords, err := RetrievePasswords(userID)
-	if err != nil {
-		http.Error(w, "Error retrieving passwords", http.StatusInternalServerError)
-		return
-	}
-
-	// Return passwords as JSON
-	json.NewEncoder(w).Encode(passwords)
-}
-
-func main() {
-	// Initialize the database connection
-	initDB()
-
-	r := mux.NewRouter()
-	r.HandleFunc("/generate-password", GeneratePasswordHandler).Methods("POST")
-	r.HandleFunc("/retrieve-passwords", RetrievePasswordsHandler).Methods("GET")
-
-	log.Fatal(http.ListenAndServe(":8080", r))
+func HashPassword(password string) (string, error) {
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
+	return string(bytes), err
 }

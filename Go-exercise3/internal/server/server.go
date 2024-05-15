@@ -9,7 +9,7 @@ import (
 
 	_ "github.com/joho/godotenv/autoload"
 
-	"Go-exercise4/internal/database"
+	"Go-exercise3/internal/database"
 )
 
 type Server struct {

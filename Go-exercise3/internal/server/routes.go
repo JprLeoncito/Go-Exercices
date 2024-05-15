@@ -1,10 +1,11 @@
 package server
 
 import (
-	"Go-exercise3/internal/database"
 	"net/http"
 	"sync"
 	"time"
+
+	"Go-exercise3/internal/database"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"

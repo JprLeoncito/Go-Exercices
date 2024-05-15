@@ -1,4 +1,4 @@
-module Go-exercise4
+module Go-exercise3
 
 go 1.19
 

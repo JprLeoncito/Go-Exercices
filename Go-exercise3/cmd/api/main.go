@@ -1,7 +1,7 @@
 package main
 
 import (
-	"Go-exercise4/internal/server"
+	"Go-exercise3/internal/server"
 
 	"fmt"
 )

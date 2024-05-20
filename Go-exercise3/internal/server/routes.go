@@ -98,7 +98,7 @@ func (s *Server) RegisterRoutes() http.Handler {
 	router := gin.Default()
 
 	// Define API endpoints
-	router.POST("/passwords", savePassword)
+	router.PUT("/passwords", savePassword)
 	router.GET("/passwords", getPasswords)
 	router.Run(":8080")
 	return router
